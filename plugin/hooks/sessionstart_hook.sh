@@ -6,11 +6,13 @@
 set -euo pipefail
 
 # Paths
-WORKER_PATH="${HOME}/.claude/learning_worker.py"
+MONITOR_PATH="${HOME}/.claude/learning_monitor.py"
+TRIGGER_SCRIPT_PATH="${HOME}/.claude/trigger_claude_learning.sh"
 # Get the directory of this script (works on macOS and Linux)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PLUGIN_DIR="${PLUGIN_DIR:-$(dirname "$SCRIPT_DIR")}"
-PLUGIN_WORKER="${PLUGIN_DIR}/scripts/learning_worker.py"
+PLUGIN_MONITOR="${PLUGIN_DIR}/scripts/learning_monitor.py"
+PLUGIN_TRIGGER="${PLUGIN_DIR}/scripts/trigger_claude_learning.sh"
 PROJECT_ROOT="${PWD}"
 MEMORY_FILE="${PROJECT_ROOT}/.data/memory.json"
 GLOBAL_QUEUE="${HOME}/.claude/learning_queue.jsonl"
@@ -20,12 +22,17 @@ TIMESTAMP=$(date +%s)
 mkdir -p "${HOME}/.claude"
 mkdir -p "${PROJECT_ROOT}/.data"
 
-# First-time setup: Install worker to global location
-if [ ! -f "$WORKER_PATH" ]; then
-    echo "📦 Installing Amplicode worker..."
-    cp "$PLUGIN_WORKER" "$WORKER_PATH"
-    chmod +x "$WORKER_PATH"
-    echo "✅ Worker installed to ~/.claude/learning_worker.py"
+# First-time setup: Install monitor and trigger script to global location
+if [ ! -f "$MONITOR_PATH" ]; then
+    echo "📦 Installing Amplicode monitor..."
+    cp "$PLUGIN_MONITOR" "$MONITOR_PATH"
+    chmod +x "$MONITOR_PATH"
+    echo "✅ Monitor installed to ~/.claude/learning_monitor.py"
+fi
+
+if [ ! -f "$TRIGGER_SCRIPT_PATH" ]; then
+    cp "$PLUGIN_TRIGGER" "$TRIGGER_SCRIPT_PATH"
+    chmod +x "$TRIGGER_SCRIPT_PATH"
 fi
 
 # Copy all supporting scripts if they don't exist
@@ -35,16 +42,17 @@ for script in learning_extractor.py learning_memory.py health_monitor.py; do
     fi
 done
 
-# Ensure worker is running (non-blocking check)
-if ! pgrep -f "learning_worker.py" > /dev/null 2>&1; then
-    echo "🚀 Starting Amplicode worker..."
+# Ensure monitor is running (non-blocking check)
+if ! pgrep -f "learning_monitor.py" > /dev/null 2>&1; then
+    echo "🚀 Starting Amplicode monitor..."
 
-    # Start worker in background with nohup
-    nohup python3 "$WORKER_PATH" > "${HOME}/.claude/worker.log" 2>&1 &
-    WORKER_PID=$!
+    # Start monitor in background with nohup
+    nohup python3 "$MONITOR_PATH" > "${HOME}/.claude/monitor.log" 2>&1 &
+    MONITOR_PID=$!
 
-    echo "✅ Worker started (PID: $WORKER_PID)"
-    echo "$WORKER_PID" > "${HOME}/.claude/learning_worker.pid"
+    echo "✅ Monitor started (PID: $MONITOR_PID)"
+    echo "   Will automatically trigger Claude Code when queue reaches 10 events"
+    echo "$MONITOR_PID" > "${HOME}/.claude/learning_monitor.pid"
 
     # Give it a moment to initialize
     sleep 0.5
