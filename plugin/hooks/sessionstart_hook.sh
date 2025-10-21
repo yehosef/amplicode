@@ -90,7 +90,104 @@ with open(lock_file, 'w') as lock:
     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 EOF
 
-# Load preferences if they exist (for display to user)
+# Auto-learning: Check if there are queued events to process
+LEARNING_PROMPT="${PROJECT_ROOT}/.claude/pending_learning.md"
+
+if [ -f "$GLOBAL_QUEUE" ] && [ -s "$GLOBAL_QUEUE" ]; then
+    QUEUE_SIZE=$(wc -l < "$GLOBAL_QUEUE" 2>/dev/null || echo "0")
+
+    if [ "$QUEUE_SIZE" -gt 0 ]; then
+        # Create learning prompt that Claude will see in context
+        cat > "$LEARNING_PROMPT" << 'LEARNING_EOF'
+# 🧠 Amplicode Auto-Learning Task
+
+**You have queued learning events to process from previous sessions.**
+
+## Your Task
+
+Analyze your conversation history and extract preferences from corrections.
+
+### What is a correction?
+
+A correction is when the user:
+- Rejected your suggestion and specified an alternative
+- Said "No, use X instead"
+- Said "Actually, prefer Y"
+- Corrected your approach
+
+### Examples
+
+```
+❌ Not a correction:
+User: "Can you add auth?"
+Claude: "I'll use JWT"
+User: "Sounds good"
+
+✅ IS a correction:
+User: "Can you add auth?"
+Claude: "I'll use JWT with Redis for sessions"
+User: "No, use local file-based sessions instead"
+     ↑ CORRECTION - user rejected Redis, prefers files
+```
+
+### Step 1: Read the Queue
+
+Read the queue file to see how many events there are:
+
+```bash
+cat ~/.claude/learning_queue.jsonl
+```
+
+### Step 2: Analyze Conversation History
+
+Look back at the conversation for corrections. For each correction, extract:
+- What was rejected
+- What was preferred
+- Why (if stated)
+- Is it project-specific or general?
+
+### Step 3: Update Memory
+
+If you found corrections, update `.data/memory.json` with this structure:
+
+```json
+{
+  "preferences": [
+    {
+      "type": "prefer",
+      "subject": "local files over Redis for sessions",
+      "context": "User said: 'No, use local file-based sessions instead'",
+      "scope": "project",
+      "confidence": 0.95,
+      "learned_at": "2025-10-22T02:30:00"
+    }
+  ],
+  "version": "1.0",
+  "updated_at": "2025-10-22T02:30:00"
+}
+```
+
+**Scopes:**
+- `"project"` - Specific to this codebase (e.g., "this legacy project uses X")
+- `"language"` - Applies to all projects in this language (e.g., "use pytest in Python")
+- `"global"` - Applies everywhere (e.g., "always use descriptive names")
+
+### Step 4: Clear Queue and This File
+
+After processing:
+1. Clear the queue: `> ~/.claude/learning_queue.jsonl`
+2. Delete this prompt: `rm .claude/pending_learning.md`
+
+---
+
+**Please process now if you found any corrections. If no corrections found, just delete this file.**
+LEARNING_EOF
+
+        echo "🧠 Auto-learning enabled - Claude will analyze $QUEUE_SIZE event(s)"
+    fi
+fi
+
+# Load existing preferences if they exist (for display to user)
 if [ -f "$MEMORY_FILE" ]; then
     PREF_COUNT=$(python3 -c "
 import json
@@ -103,7 +200,7 @@ except:
 " 2>/dev/null || echo "0")
 
     if [ "$PREF_COUNT" -gt 0 ]; then
-        echo "🧠 Loaded $PREF_COUNT learned preference(s) for this project"
+        echo "✅ Loaded $PREF_COUNT learned preference(s) for this project"
     fi
 fi
 
