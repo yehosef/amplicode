@@ -2,6 +2,9 @@
 
 **Background learning system for Claude Code** - inspired by Microsoft Amplifier
 
+> **Status:** Architecture & Documentation Complete | Plugin Implementation In Progress
+> **Distribution:** Claude Code Plugin (coming soon to plugin marketplace)
+
 ## What is Amplicode?
 
 Amplicode is a metacognitive enhancement system for Claude Code that learns from your interactions and improves over time. Unlike traditional AI assistants that start fresh each session, Amplicode captures your preferences, corrections, and patterns to provide increasingly personalized assistance.
@@ -66,34 +69,63 @@ Hooks (Bash) → Queue (.jsonl) → Worker (Python) → Memory (.json)
 
 ## Quick Start
 
-**Prerequisites:**
+### Installation
+
+**Step 1: Install Plugin (Coming Soon)**
+```
+# In Claude Code
+/plugin install amplicode
+
+# Restart Claude Code
+# Done! Hooks auto-register, worker auto-starts on first session
+```
+
+**Step 2: Prerequisites (Auto-checked on first run)**
 ```bash
+# macOS M1
 brew install python@3.11 jq
 pip3 install anthropic psutil
 ```
 
-**Installation:** (Coming in Phase 1 implementation)
-```bash
-# Install hooks
-./install_hooks.sh
+The plugin will notify you if prerequisites are missing.
 
-# Start worker
-claude-learning start
+### Usage
 
-# Check status
-claude-learning status
+**Check Status:**
 ```
+/amplicode-status
+```
+
+**View Logs:**
+```
+/amplicode-logs
+```
+
+**Restart Worker:**
+```
+/amplicode-restart
+```
+
+**How It Works:**
+1. Make corrections during your session (e.g., "No, use files instead of Redis")
+2. Worker learns your preferences in the background
+3. Next session loads your preferences automatically
+4. Claude adapts to your style over time
 
 ## Implementation Status
 
 **Current Phase:** Architecture & Documentation ✅
 
-**Next Phase:** Implementation (Week 1)
-- [ ] Bash hooks (stop, sessionend, sessionstart)
+**Distribution Model:** Claude Code Plugin
+
+**Next Phase:** Plugin Implementation (Week 1)
+- [ ] Create plugin structure (hooks/, commands/, scripts/)
+- [ ] Bash hooks with auto-install logic
 - [ ] Global worker with self-watchdog
-- [ ] CLI commands (status, logs, restart)
+- [ ] Slash commands (/amplicode-status, /amplicode-logs, /amplicode-restart)
 - [ ] File locking and atomic writes
 - [ ] macOS M1 test scripts
+- [ ] Plugin manifest (plugin.json)
 
 ## Key Technical Decisions
 

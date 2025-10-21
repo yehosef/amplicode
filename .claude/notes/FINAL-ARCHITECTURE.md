@@ -1,7 +1,25 @@
 # Final Architecture: Background Learning System
-**Date:** 2025-10-21
+**Date:** 2025-10-22 (Updated for Plugin Distribution)
 **Status:** APPROVED FOR IMPLEMENTATION
 **Platform:** macOS M1 (with notes for cross-platform)
+**Distribution:** Claude Code Plugin
+
+---
+
+## Plugin Distribution Model
+
+Amplicode is distributed as a **Claude Code plugin**, enabling:
+- ✅ **One-command installation** - `/plugin install amplicode`
+- ✅ **Auto-configuration** - Hooks register automatically
+- ✅ **Team sharing** - Repository-level plugin for entire team
+- ✅ **Slash commands** - `/amplicode-status`, `/amplicode-restart`, `/amplicode-logs`
+- ✅ **Global worker** - Single background process serves all Claude Code sessions
+
+**Why Plugin vs System Install?**
+- Easier installation (no manual file copying)
+- Better team collaboration (auto-installed for all team members)
+- Integrated with Claude Code lifecycle
+- Standard distribution mechanism
 
 ---
 
@@ -73,12 +91,34 @@
 
 ### 1. Bash Hooks (~30 lines each)
 
-**Location:** `.claude/tools/`
+**Plugin Location:** `amplicode-plugin/hooks/`
+**Registered via:** `hooks/hooks.json` (auto-registered when plugin installed)
 
 **Files:**
 - `stop_hook.sh` - Detects corrections, queues (fires 50-100x/session)
 - `sessionend_hook.sh` - Queues session analysis (fires 1x/session)
-- `sessionstart_hook.sh` - Loads preferences, starts worker (fires 1x/session)
+- `sessionstart_hook.sh` - Loads preferences, ensures worker running (fires 1x/session)
+
+**Plugin hooks.json:**
+```json
+{
+  "stop": {
+    "command": "bash $PLUGIN_DIR/hooks/stop_hook.sh",
+    "description": "Queue potential corrections for background learning",
+    "timeout": 5000
+  },
+  "sessionEnd": {
+    "command": "bash $PLUGIN_DIR/hooks/sessionend_hook.sh",
+    "description": "Queue session summary for analysis",
+    "timeout": 5000
+  },
+  "sessionStart": {
+    "command": "bash $PLUGIN_DIR/hooks/sessionstart_hook.sh",
+    "description": "Load preferences and ensure worker is running",
+    "timeout": 10000
+  }
+}
+```
 
 **Example: stop_hook.sh**
 ```bash
@@ -116,6 +156,47 @@ fi
 
 # Performance: 10-20ms (vs 250-350ms for Python)
 ```
+
+**Example: sessionstart_hook.sh (Plugin Auto-Install)**
+```bash
+#!/bin/bash
+set -euo pipefail
+
+WORKER_PATH="${HOME}/.claude/learning_worker.py"
+PLUGIN_WORKER="${PLUGIN_DIR}/scripts/learning_worker.py"
+
+# First-time setup: Copy worker to global location
+if [ ! -f "$WORKER_PATH" ]; then
+    echo "Installing Amplicode worker..."
+    cp "$PLUGIN_WORKER" "$WORKER_PATH"
+    chmod +x "$WORKER_PATH"
+fi
+
+# Ensure worker is running (non-blocking)
+if ! pgrep -f "learning_worker.py" > /dev/null; then
+    nohup "$WORKER_PATH" > ~/.claude/worker.log 2>&1 &
+    echo "Started Amplicode worker (PID $!)"
+fi
+
+# Load preferences into environment for this session
+# (Claude Code will see these as context)
+if [ -f ".data/memory.json" ]; then
+    # Export preferences as env vars or write to .claude/context
+    python3 -c "
+import json, os
+with open('.data/memory.json') as f:
+    data = json.load(f)
+    # Could export to env, or write to context file
+    print(f'Loaded {len(data.get(\"preferences\", []))} preferences')
+"
+fi
+```
+
+**Why SessionStart Installs Worker:**
+- Hook fires once per session (low frequency)
+- 10s timeout allows for setup work
+- Worker installed globally (persists across all projects)
+- Non-blocking start via `nohup` (doesn't wait for worker)
 
 ### 2. Global Queue
 
@@ -212,9 +293,10 @@ def should_restart_worker():
 
 ### 4. User Commands
 
-**claude-learning status**
-```bash
-$ claude-learning status
+**Option A: Slash Commands (Plugin Provides)**
+
+**/amplicode-status**
+```
 🟢 Worker healthy
 
    Status: processing
@@ -223,22 +305,51 @@ $ claude-learning status
    Last heartbeat: 2s ago
 ```
 
-**claude-learning logs**
-```bash
-$ claude-learning logs --follow
-2025-10-21 14:30:00 [INFO] Worker started (PID 1234)
-2025-10-21 14:30:01 [INFO] Processing correction event
-2025-10-21 14:30:06 [INFO] Extracted preference: file-based over Redis
-2025-10-21 14:30:07 [INFO] Updated memory.json for project /Users/you/proj1
+**/amplicode-logs**
+```
+2025-10-22 14:30:00 [INFO] Worker started (PID 1234)
+2025-10-22 14:30:01 [INFO] Processing correction event
+2025-10-22 14:30:06 [INFO] Extracted preference: file-based over Redis
+2025-10-22 14:30:07 [INFO] Updated memory.json for project /Users/you/proj1
 ```
 
-**claude-learning restart**
-```bash
-$ claude-learning restart
+**/amplicode-restart**
+```
 Stopping worker (PID 1234)...
 Worker stopped
 Starting worker...
 Worker started (PID 5678)
+```
+
+**Option B: CLI Commands (Optional Install)**
+
+For users who want terminal access:
+```bash
+# Install CLI wrapper (optional)
+$ ln -s ~/.claude/amplicode_cli.sh /usr/local/bin/claude-learning
+
+# Then use from terminal
+$ claude-learning status
+$ claude-learning logs --follow
+$ claude-learning restart
+```
+
+**Plugin Structure:**
+```
+amplicode-plugin/
+├── hooks/
+│   ├── hooks.json              # Auto-registered hooks
+│   ├── stop_hook.sh
+│   ├── sessionend_hook.sh
+│   └── sessionstart_hook.sh
+├── commands/
+│   ├── status.md               # /amplicode-status
+│   ├── logs.md                 # /amplicode-logs
+│   └── restart.md              # /amplicode-restart
+├── scripts/
+│   ├── learning_worker.py      # Copied to ~/.claude/ on first use
+│   └── ensure_worker.sh        # Worker lifecycle management
+└── README.md
 ```
 
 ---
@@ -522,41 +633,55 @@ $ claude-learning restart
 
 ## Implementation Files
 
-### Hooks (~90 lines total)
+### Plugin Structure
 ```
-.claude/tools/
-├── stop_hook.sh              (30 lines) - Bash, fires 50-100x/session
-├── sessionend_hook.sh        (20 lines) - Bash, fires 1x/session
-├── sessionstart_hook.sh      (40 lines) - Bash, fires 1x/session
-└── start_worker.sh           (20 lines) - Bash, starts worker if needed
+amplicode-plugin/
+├── hooks/
+│   ├── hooks.json                 (25 lines) - Hook registration
+│   ├── stop_hook.sh               (30 lines) - Bash, fires 50-100x/session
+│   ├── sessionend_hook.sh         (20 lines) - Bash, fires 1x/session
+│   └── sessionstart_hook.sh       (50 lines) - Bash, fires 1x/session, installs worker
+│
+├── commands/
+│   ├── status.md                  (30 lines) - /amplicode-status slash command
+│   ├── logs.md                    (30 lines) - /amplicode-logs slash command
+│   └── restart.md                 (30 lines) - /amplicode-restart slash command
+│
+├── scripts/
+│   ├── learning_worker.py         (200 lines) - Main worker loop
+│   ├── learning_extractor.py      (100 lines) - LLM extraction logic
+│   ├── learning_memory.py         (50 lines) - Safe memory writes with locking
+│   └── ensure_worker.sh           (30 lines) - Worker lifecycle management
+│
+├── tests/
+│   ├── test_hook_performance.sh   (50 lines) - Verify <50ms per hook call
+│   ├── test_macos_setup.sh        (50 lines) - macOS M1 prerequisites
+│   ├── test_sandbox.sh            (50 lines) - Sandbox compatibility
+│   └── test_multi_session.sh      (50 lines) - Multiple Claude Code windows
+│
+├── plugin.json                    (20 lines) - Plugin manifest
+└── README.md                      (100 lines) - Installation & usage
 ```
 
-### Worker (~350 lines total)
+**Total: ~915 lines of code**
+
+### Global Runtime Files (Created by Plugin)
 ```
 ~/.claude/
-├── learning_worker.py        (200 lines) - Main loop
-├── learning_extractor.py     (100 lines) - LLM extraction
-└── learning_memory.py        (50 lines) - Safe memory writes
+├── learning_worker.py             (copied from plugin on first SessionStart)
+├── learning_queue.jsonl           (created automatically)
+├── worker.log                     (worker stdout/stderr)
+├── worker_heartbeat.json          (updated every 1s)
+└── learning_worker.pid            (worker process ID)
 ```
 
-### CLI Commands (~150 lines total)
+### Per-Project Data
 ```
-/usr/local/bin/
-├── claude-learning           (50 lines) - Main CLI wrapper
-├── claude-learning-status    (50 lines) - Show health
-└── claude-learning-logs      (50 lines) - View logs
+<project>/.data/
+├── memory.json                    (learned preferences for this project)
+├── memory.json.backup             (backup before each write)
+└── memory.lock                    (file lock for concurrent safety)
 ```
-
-### Tests (~200 lines total)
-```
-tests/
-├── test_hook_performance.sh   (50 lines)
-├── test_macos_setup.sh        (50 lines)
-├── test_sandbox.sh            (50 lines)
-└── test_multi_session.sh      (50 lines)
-```
-
-**Total: ~790 lines of code**
 
 ---
 
@@ -585,17 +710,22 @@ tests/
 
 ## Next Steps
 
-1. **Create GitHub repo** - `amplicode`
-2. **Implement Phase 1** (Week 1):
-   - Bash hooks
-   - Global worker
-   - Basic CLI commands
+1. **✅ Create GitHub repo** - https://github.com/yehosef/amplicode
+2. **Implement Plugin (Week 1)**:
+   - Create plugin structure (hooks/, commands/, scripts/)
+   - Implement bash hooks with auto-install logic
+   - Implement global worker with self-watchdog
+   - Create slash commands (/amplicode-status, /amplicode-logs, /amplicode-restart)
+   - Write plugin.json manifest
 3. **Test on macOS M1**:
-   - Multi-session scenario
-   - Worker crash/restart
-   - Performance benchmarks
-4. **Test in sandbox** (when available)
-5. **Deploy & iterate**
+   - Multi-session scenario (multiple Claude Code windows)
+   - Worker crash/restart recovery
+   - Hook performance benchmarks (<50ms target)
+4. **Test in sandbox** (when Claude Code sandbox mode available)
+5. **Publish Plugin**:
+   - Submit to plugin marketplace
+   - Create installation documentation
+   - Demo video showing correction pattern learning
 
 ---
 
